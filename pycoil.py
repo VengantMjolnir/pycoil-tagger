@@ -1,5 +1,7 @@
 from bluepy.btle import UUID, Peripheral, Scanner, DefaultDelegate, BTLEException
 import struct
+from threading import Timer
+import binascii
 
 recoilDevice = None
 log_id_data = False
@@ -14,10 +16,20 @@ CLIENT_CONFIG   = "00002902-0000-1000-8000-00805f9b34fb"
 
 TYPE_PISTOL = 2
 TYPE_RIFLE = 1
+STATE_IDLE = 0
+STATE_RELOADING = 1
 
-def log_data(bytes):
-    output = ' '.join(format(n,'02X') for n in bytes)
+
+def log_data(data_to_log):
+    output = ' '.join(format(n, '02X') for n in data_to_log)
     print "DATA: ", output
+
+
+def log_bytes(original_data, bytes_to_log, struct_to_log):
+    print 'Original values:', original_data
+    print 'Format string  :', struct_to_log.format
+    print 'Uses           :', struct_to_log.size, 'bytes'
+    print 'Packed Value   :', binascii.hexlify(bytes_to_log)
 
 
 class ScanDelegate(DefaultDelegate):
@@ -34,21 +46,47 @@ class ScanDelegate(DefaultDelegate):
 
 
 class DataDelegate(DefaultDelegate):
-    def __init__(self, handle):
+    def __init__(self, handle, telemetry):
         DefaultDelegate.__init__(self)
         self.handle = handle
+        self.telemetry = telemetry
+        self.ready = False
+        self.reload_state = STATE_IDLE
+        self.reload_interval = 3.0
+        self.reload_timer = None
+        # Data from tagger
         self.player_id = 0
         self.reload_btn_count = 0
         self.fire_btn_count = 0
+        self.back_btn_count = 0
         self.power_btn_count = 0
-        self.ready = False
+        self.battery_level = 0
+        self.ammo_count = 0
 
     def reset(self, bytes):
         self.ready = True
         self.player_id = bytes[1]
         self.fire_btn_count = bytes[3] & 0x0f
         self.reload_btn_count = bytes[3] & 0xf0
-        print "Fire count: %d - Reload count: %d" % (self.fire_btn_count, self.reload_btn_count)
+        self.back_btn_count = bytes[4] & 0x0f
+        self.power_btn_count = bytes[5] & 0x0f
+        self.battery_level = bytes[7]
+        self.ammo_count = bytes[14]
+        if self.reload_timer is not None:
+            self.reload_timer.cancel()
+
+    def start_reload(self):
+        if self.reload_state == STATE_IDLE:
+            self.reload_state = STATE_RELOADING
+            self.telemetry.start_reload()
+            self.reload_timer = Timer(self.reload_interval, self.finish_reload)
+            self.reload_timer.start()
+        else:
+            print "Still Reloading!"
+
+    def finish_reload(self):
+        self.telemetry.finish_reload(30)
+        self.reload_state = STATE_IDLE
 
     def handleNotification(self, cHandle, data):
         if cHandle == self.handle:
@@ -58,14 +96,41 @@ class DataDelegate(DefaultDelegate):
             if log_telemetry_data is True:
                 log_data(bytes)
 
+            player_id = bytes[1]
             fire_btn_count = bytes[3] & 0x0f
             reload_btn_count = bytes[3] & 0xf0
+            back_btn_count = bytes[4] & 0x0f
+            power_btn_count = bytes[5] & 0x0f
+
+            self.battery_level = bytes[7]
+            ammo_count = bytes[14]
+
+            # Update ammo count first
+            if ammo_count != self.ammo_count:
+                print "Ammo: ", ammo_count
+                self.ammo_count = ammo_count
+
+            # Check input buttons
             if fire_btn_count != self.fire_btn_count:
                 print "Pressed fire!"
                 self.fire_btn_count = fire_btn_count
+                if self.ammo_count <= 0:
+                    print "Ammo: EMPTY"
             if reload_btn_count != self.reload_btn_count:
                 print "Pressed reload!"
                 self.reload_btn_count = reload_btn_count
+                self.start_reload()
+            if back_btn_count != self.back_btn_count:
+                print "Pressed Back/Mic!"
+                self.back_btn_count = back_btn_count
+            if power_btn_count != self.power_btn_count:
+                print "Pressed Power!"
+                self.power_btn_count = power_btn_count
+
+            # Validate player ID hasn't changed, but ultimately the Tagger IS the authority
+            if player_id != self.player_id:
+                print"Player ID changed! Old/New: %d/%d" % (self.player_id, player_id)
+                self.player_id = player_id
 
 
 class TelemetryService:
@@ -96,7 +161,25 @@ class TelemetryService:
             self.data_handle = self.data.getHandle()
             self.config = self.data.getDescriptors(forUUID=self.dataCCCD)[0]
             self.config.write(b"\x01\x00")
-        self.peripheral.setDelegate(DataDelegate(self.data_handle))
+        self.peripheral.setDelegate(DataDelegate(self.data_handle, self))
+
+    def start_reload(self):
+        data = [0x00] * 20
+        data[0] = 0xF0
+        data[2] = 0x02
+        s = struct.Struct('20B')
+        bytes = s.pack(*data)
+        self.control.write(bytes)
+        print "Starting Reload..."
+
+    def finish_reload(self, ammo):
+        data = [0x00] * 20
+        data[2] = 0x04
+        data[6] = 0x1E
+        s = struct.Struct('20B')
+        bytes = s.pack(*data)
+        self.control.write(bytes)
+        print "Reload complete!"
 
     def read_control(self):
         return self.control.read()
@@ -156,16 +239,16 @@ while recoilDevice is None:
 if recoilDevice is not None:
     tagger = TaggerService(recoilDevice)
     tagger.connect()
-    data = tagger.telemetry.read_id()
-    bytes = struct.unpack("20B", data)
-    if bytes[10] == 1:
+    id_data = tagger.telemetry.read_id()
+    id_bytes = struct.unpack("20B", id_data)
+    if id_bytes[10] == 1:
         print "Found SR-12 Rogue Rifle!"
         tagger.set_type(TYPE_RIFLE)
-    elif bytes[10] == 2:
+    elif id_bytes[10] == 2:
         print "Found RK-45 Spitfire Pistol!"
         tagger.set_type(TYPE_PISTOL)
     if log_id_data is True:
-        log_data(bytes)
+        log_data(id_bytes)
 
 while True:
     if tagger.poll_data(1.0) is False:
