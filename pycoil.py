@@ -2,6 +2,8 @@ from bluepy.btle import UUID, Peripheral, Scanner, DefaultDelegate, BTLEExceptio
 import struct
 from threading import Timer
 import binascii
+import sys
+import pygame.display
 
 recoilDevice = None
 log_id_data = False
@@ -32,6 +34,11 @@ def log_bytes(original_data, bytes_to_log, struct_to_log):
     print 'Packed Value   :', binascii.hexlify(bytes_to_log)
 
 
+def print_console(message):
+    sys.stdout.write("\r%s" % message)
+    sys.stdout.flush()
+
+
 class ScanDelegate(DefaultDelegate):
     def __init__(self):
         DefaultDelegate.__init__(self)
@@ -54,6 +61,7 @@ class DataDelegate(DefaultDelegate):
         self.reload_state = STATE_IDLE
         self.reload_interval = 3.0
         self.reload_timer = None
+        self.recoil_enabled = True
         # Data from tagger
         self.player_id = 0
         self.reload_btn_count = 0
@@ -82,11 +90,16 @@ class DataDelegate(DefaultDelegate):
             self.reload_timer = Timer(self.reload_interval, self.finish_reload)
             self.reload_timer.start()
         else:
-            print "Still Reloading!"
+            print_console("Still Reloading!")
 
     def finish_reload(self):
         self.telemetry.finish_reload(30)
         self.reload_state = STATE_IDLE
+
+    def set_recoil(self, enabled):
+        self.recoil_enabled = enabled
+        self.telemetry.set_recoil(enabled)
+        print_console("Recoil is %s " % 'ENABLED' if self.recoil_enabled else 'DISABLED')
 
     def handleNotification(self, cHandle, data):
         if cHandle == self.handle:
@@ -107,29 +120,30 @@ class DataDelegate(DefaultDelegate):
 
             # Update ammo count first
             if ammo_count != self.ammo_count:
-                print "Ammo: ", ammo_count
+                print_console("Ammo: %d" % ammo_count)
                 self.ammo_count = ammo_count
 
             # Check input buttons
             if fire_btn_count != self.fire_btn_count:
-                print "Pressed fire!"
+                print_console("Pressed fire!")
                 self.fire_btn_count = fire_btn_count
                 if self.ammo_count <= 0:
-                    print "Ammo: EMPTY"
+                    print_console("Pressed fire! EMPTY")
             if reload_btn_count != self.reload_btn_count:
-                print "Pressed reload!"
+                print_console("Pressed reload!")
                 self.reload_btn_count = reload_btn_count
                 self.start_reload()
             if back_btn_count != self.back_btn_count:
-                print "Pressed Back/Mic!"
+                print_console("Pressed Back/Mic!")
                 self.back_btn_count = back_btn_count
             if power_btn_count != self.power_btn_count:
-                print "Pressed Power!"
+                print_console("Pressed Power!")
                 self.power_btn_count = power_btn_count
+                self.set_recoil(not self.recoil_enabled)
 
             # Validate player ID hasn't changed, but ultimately the Tagger IS the authority
             if player_id != self.player_id:
-                print"Player ID changed! Old/New: %d/%d" % (self.player_id, player_id)
+                print_console("Player ID changed! Old/New: %d/%d" % (self.player_id, player_id))
                 self.player_id = player_id
 
 
@@ -138,15 +152,17 @@ class TelemetryService:
     idUUID   = UUID(ID_UUID)
     dataUUID = UUID(TELEMETRY_UUID)
     ctrlUUID = UUID(COMMAND_UUID)
+    confUUID = UUID(CONFIG_UUID)
     dataCCCD = UUID(CLIENT_CONFIG)
 
     def __init__(self, peripheral):
         self.peripheral = peripheral
         self.service = None
         self.control = None
+        self.config = None
         self.id = None
         self.data = None
-        self.config = None
+        self.data_descriptor = None
         self.data_handle = 0
 
     def enable(self):
@@ -156,11 +172,13 @@ class TelemetryService:
             self.id = self.service.getCharacteristics(self.idUUID)[0]
         if self.control is None:
             self.control = self.service.getCharacteristics(self.ctrlUUID)[0]
+        if self.config is None:
+            self.config = self.service.getCharacteristics(self.confUUID)[0]
         if self.data is None:
             self.data = self.service.getCharacteristics(self.dataUUID)[0]
             self.data_handle = self.data.getHandle()
-            self.config = self.data.getDescriptors(forUUID=self.dataCCCD)[0]
-            self.config.write(b"\x01\x00")
+            self.data_descriptor = self.data.getDescriptors(forUUID=self.dataCCCD)[0]
+            self.data_descriptor.write(b"\x01\x00")
         self.peripheral.setDelegate(DataDelegate(self.data_handle, self))
 
     def start_reload(self):
@@ -170,7 +188,7 @@ class TelemetryService:
         s = struct.Struct('20B')
         bytes = s.pack(*data)
         self.control.write(bytes)
-        print "Starting Reload..."
+        print_console("Starting Reload...")
 
     def finish_reload(self, ammo):
         data = [0x00] * 20
@@ -179,7 +197,17 @@ class TelemetryService:
         s = struct.Struct('20B')
         bytes = s.pack(*data)
         self.control.write(bytes)
-        print "Reload complete!"
+        print_console("Reload complete!")
+
+    def set_recoil(self, enabled):
+        data = [0x00] * 20
+        data[0] = 0x10
+        data[2] = 0x02
+        data[3] = 0x03 if enabled else 0x02
+        data[4] = 0xFF
+        s = struct.Struct('20B')
+        bytes = s.pack(*data)
+        self.config.write(bytes)
 
     def read_control(self):
         return self.control.read()
@@ -188,8 +216,8 @@ class TelemetryService:
         return self.id.read()
 
     def disable(self):
-        if self.config is not None:
-            self.config.write(b"\x00\x00")
+        if self.data_descriptor is not None:
+            self.data_descriptor.write(b"\x00\x00")
 
 
 class TaggerService:
@@ -231,6 +259,18 @@ class TaggerService:
             return False
 
 
+pygame.display.init()
+info = pygame.display.Info()
+print info
+modes = pygame.display.list_modes(16)
+if not modes:
+    print '16-bit not supported'
+else:
+    print 'Found resolution: ', modes[0]
+    screen = pygame.display.set_mode(modes[0], pygame.FULLSCREEN, 16)
+
+
+
 scanner = Scanner().withDelegate(ScanDelegate())
 while recoilDevice is None:
     print "Scanning for Recoil Tagger"
@@ -250,8 +290,16 @@ if recoilDevice is not None:
     if log_id_data is True:
         log_data(id_bytes)
 
-while True:
+running = True
+while running:
     if tagger.poll_data(1.0) is False:
         break
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    pygame.draw.rect(screen, (0, 128, 255), pygame.Rect(30, 30, 60, 60))
+    pygame.display.flip()
 
 print "Disconnected"

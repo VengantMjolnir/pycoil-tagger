@@ -1,0 +1,59 @@
+import socket
+
+
+MESSAGE_PREFIX = "SimpleCoil:"
+NETWORK_VERSION = "06"
+
+# All of these messages are straightforward and contain no extra data
+SHOTFIRED = "SHOTFIRED"
+HIT = "HIT"
+OUT = "OUT"
+ELIMINATED = "ELIMINATED"
+LEAVE = "LEAVE"
+STARTGAME = "STARTGAME"
+ENDGAME = "ENDGAME"
+ERROR = "ERROR"
+FAILEDTOJOIN = "FAILEDTOJOIN"
+VERSIONERROR = "VERSIONERROR"
+SAMETEAM = "SAMETEAM"
+SERVERCREATED = "SERVERCREATED"
+SERVERCANCEL = "SERVERCANCEL"
+TEAMELIMINATED = "TEAMELIMINATED"
+SERVERREPLY = "SERVERREPLY"
+GPSLOCUPDATE = "GPSLOCUPDATE"
+GPSDATAUPDATE = "GPSDATAUPDATE"
+GPSSETTING = "GPSSETTING"
+PLAYERDATAUPDATE = "PLAYERDATAUPDATE"
+PLAYERDATAREQUEST = "PLAYERDATAREQUEST"
+NETWORKCONNECTED = "NETWORKCONNECTED"
+NETWORKDISCONNECTED = "NETWORKDISCONNECTED"
+PLAYERSETTINGSUPDATE = "PLAYERSETTINGSUPDATE"
+
+# When players join a game in progress, the server can send the player updates on appropriate values.
+# These items are intent extras.
+HASGAMEUPDATE = "HASGAMEUPDATE"
+SCORE = "SCORE"
+TEAMSCORE = "TEAMSCORE"
+ELIMINATIONS = "ELIMINATIONS"
+TIMEREMAINING = "TIMEREMAINING"
+GAMESTATE = "GAMESTATE"
+LONGITUDE = "longitude"
+LATITUDE = "latitude"
+FULLUPDATE = "fullupdate"
+PLAYERDATA = "playerdata"
+
+JOIN = "JOIN"
+LISTPLAYERS = "LISTPLAYERS"
+
+
+def get_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
