@@ -1,0 +1,8 @@
+{
+    "left_fore":"ui/PNG/barHorizontal_red_left.png",
+    "right_fore":"ui/PNG/barHorizontal_red_right.png",
+    "mid_fore":"ui/PNG/barHorizontal_red_mid.png",
+    "left_back":"ui/PNG/barHorizontal_shadow_left.png",
+    "mid_back":"ui/PNG/barHorizontal_shadow_mid.png",
+    "right_back":"ui/PNG/barHorizontal_shadow_right.png"
+}

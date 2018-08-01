@@ -1,0 +1,10 @@
+{
+    "slice":
+    {
+        "l":35,
+        "r":60,
+        "t":35,
+        "b":25
+    },
+    "image":"ui/PNG/metalPanel_blueCorner.png"
+}
